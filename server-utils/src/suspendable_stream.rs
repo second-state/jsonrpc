@@ -1,8 +1,8 @@
 use std::time::{Duration};
 use tokio_timer::{wheel, Timer, Sleep};
 use std::io;
-use core::futures::prelude::*;
-use core::futures::task;
+use jsonrpc_core::futures::prelude::*;
+use jsonrpc_core::futures::task;
 /// `Incoming` is a stream of incoming sockets
 /// Polling the stream may return a temporary io::Error
 /// (for instance if we can't open the connection because of "too many open files" limit)

@@ -5,7 +5,7 @@ use std::{io, thread};
 use std::sync::mpsc;
 use tokio_core;
 
-use core::futures::{self, Future};
+use jsonrpc_core::futures::{self, Future};
 
 /// Possibly uninitialized event loop remote.
 #[derive(Debug)]

@@ -6,7 +6,7 @@
 extern crate log;
 
 extern crate globset;
-extern crate jsonrpc_core as core;
+extern crate jsonrpc_core;
 extern crate bytes;
 
 pub extern crate tokio_core;
