@@ -56,8 +56,6 @@ impl Server {
 			config.max_connections = max_connections;
 			// don't grow non-final fragments (to prevent DOS)
 			config.fragments_grow = false;
-			// don't accept super large requests
-			config.max_in_buffer = 5 * 1024 * 1024; // 5MB
 			// accept only handshakes beginning with GET
 			config.method_strict = true;
 			// require masking
