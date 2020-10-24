@@ -4,7 +4,7 @@ members = [
 	"http",
 	"ipc",
 	"macros",
-	"minihttp",
+	# "minihttp",
 	"pubsub",
 	"pubsub/more-examples",
 	"server-utils",
