@@ -1,9 +1,11 @@
 use std::sync::Arc;
 use std::collections::HashMap;
 use std::ops::{Deref, DerefMut};
+use io::future::lazy;
 
 use serde_json;
 use futures::{self, future, Future};
+
 
 use calls::{RemoteProcedure, Metadata, RpcMethodSimple, RpcMethod, RpcNotificationSimple, RpcNotification};
 use middleware::{self, Middleware};
@@ -11,18 +13,22 @@ use types::{Error, ErrorCode, Version};
 use types::{Request, Response, Call, Output};
 
 /// A type representing middleware or RPC response before serialization.
-pub type FutureResponse = Box<Future<Item=Option<Response>, Error=()> + Send>;
+pub type FutureResponse = std::pin::Pin<Box<dyn Future<Output = Option<Response>> + Send>>;
+
 
 /// A type representing future string response.
 pub type FutureResult<F> = future::Map<
-	future::Either<future::FutureResult<Option<Response>, ()>, FutureRpcResult<F>>,
+	future::Either<
+		future::Ready<Option<Response>>,
+		FutureRpcResult<F>
+	>,
 	fn(Option<Response>) -> Option<String>,
 >;
 
 /// A type representing a result of a single method call.
 pub type FutureOutput = future::Either<
-	Box<Future<Item=Option<Output>, Error=()> + Send>,
-	future::FutureResult<Option<Output>, ()>,
+	std::pin::Pin<Box<dyn Future<Output = Option<Output>> + Send>>,
+	futures::io::Result<Option<Output>>,
 >;
 
 /// A type representing an optional `Response` for RPC `Request`.
@@ -177,12 +183,12 @@ impl<T: Metadata, S: Middleware<T>> MetaIoHandler<T, S> {
 	/// If you have any asynchronous methods in your RPC it is much wiser to use
 	/// `handle_request` instead and deal with asynchronous requests in a non-blocking fashion.
 	pub fn handle_request_sync(&self, request: &str, meta: T) -> Option<String> {
-		self.handle_request(request, meta).wait().expect("Handler calls can never fail.")
+		futures_executor::block_on(self.handle_request(request, meta))
 	}
 
 	/// Handle given request asynchronously.
 	pub fn handle_request(&self, request: &str, meta: T) -> FutureResult<S::Future> {
-		use self::future::Either::{A, B};
+		use self::future::Either;
 		fn as_string(response: Option<Response>) -> Option<String> {
 			let res = response.map(write_response);
 			debug!(target: "rpc", "Response: {}.", match res {
@@ -195,8 +201,8 @@ impl<T: Metadata, S: Middleware<T>> MetaIoHandler<T, S> {
 		trace!(target: "rpc", "Request: {}.", request);
 		let request = read_request(request);
 		let result = match request {
-			Err(error) => A(futures::finished(Some(Response::from(error, self.compatibility.default_version())))),
-			Ok(request) => B(self.handle_rpc_request(request, meta)),
+			Err(error) => Either::Left(futures::future::ready(Some(Response::from(error, self.compatibility.default_version())))),
+			Ok(request) => Either::Right(self.handle_rpc_request(request, meta)),
 		};
 
 		result.map(as_string)
@@ -204,7 +210,7 @@ impl<T: Metadata, S: Middleware<T>> MetaIoHandler<T, S> {
 
 	/// Handle deserialized RPC request.
 	pub fn handle_rpc_request(&self, request: Request, meta: T) -> FutureRpcResult<S::Future> {
-		use self::future::Either::{A, B};
+		use self::future::Either;
 
 		fn output_as_response(output: Option<Output>) -> Option<Response> {
 			output.map(Response::Single)
@@ -221,12 +227,12 @@ impl<T: Metadata, S: Middleware<T>> MetaIoHandler<T, S> {
 
 		self.middleware.on_request(request, meta, |request, meta| match request {
 			Request::Single(call) => {
-				A(self.handle_call(call, meta).map(output_as_response as fn(Option<Output>) ->
+				Either::Left(self.handle_call(call, meta).map(output_as_response as fn(Option<Output>) ->
 												   Option<Response>))
 			},
 			Request::Batch(calls) => {
 				let futures: Vec<_> = calls.into_iter().map(move |call| self.handle_call(call, meta.clone())).collect();
-				B(futures::future::join_all(futures).map(outputs_as_batch as fn(Vec<Option<Output>>) ->
+				Either::Right(futures::future::join_all(futures).map(outputs_as_batch as fn(Vec<Option<Output>>) ->
 																				Option<Response>))
 			},
 		})
@@ -234,7 +240,7 @@ impl<T: Metadata, S: Middleware<T>> MetaIoHandler<T, S> {
 
 	/// Handle single call asynchronously.
 	pub fn handle_call(&self, call: Call, meta: T) -> FutureOutput {
-		use self::future::Either::{A, B};
+		use self::future::Either;
 
 		match call {
 			Call::MethodCall(method) => {
@@ -243,9 +249,9 @@ impl<T: Metadata, S: Middleware<T>> MetaIoHandler<T, S> {
 				let jsonrpc = method.jsonrpc;
 				let valid_version = self.compatibility.is_version_valid(jsonrpc);
 
-				let call_method = |method: &Arc<RpcMethod<T>>| {
+				let call_method = |method: &Arc<dyn RpcMethod<T>>| {
 					let method = method.clone();
-					futures::lazy(move || method.call(params, meta))
+					lazy(move |_| method.call(params, meta))
 				};
 
 				let result = match (valid_version, self.methods.get(&method.method)) {
@@ -259,17 +265,17 @@ impl<T: Metadata, S: Middleware<T>> MetaIoHandler<T, S> {
 				};
 
 				match result {
-					Ok(result) => A(Box::new(
-						result.then(move |result| futures::finished(Some(Output::from(result, id, jsonrpc))))
+					Ok(result) => Either::Left(Box::new(
+						result.then(move |result| futures::future::ready(Some(Output::from(result, id, jsonrpc))))
 					)),
-					Err(err) => B(futures::finished(Some(Output::from(Err(err), id, jsonrpc)))),
+					Err(err) => Either::Right(futures::future::ready(Some(Output::from(Err(err), id, jsonrpc)))),
 				}
 			},
 			Call::Notification(notification) => {
 				let params = notification.params;
 				let jsonrpc = notification.jsonrpc;
 				if !self.compatibility.is_version_valid(jsonrpc) {
-					return B(futures::finished(None));
+					return Either::Right(futures::future::ready(None));
 				}
 
 				match self.methods.get(&notification.method) {
@@ -284,10 +290,10 @@ impl<T: Metadata, S: Middleware<T>> MetaIoHandler<T, S> {
 					_ => {},
 				}
 
-				B(futures::finished(None))
+				Either::Right(futures::future::ready(None))
 			},
 			Call::Invalid { id } => {
-				B(futures::finished(Some(Output::invalid_request(id, self.compatibility.default_version()))))
+				Either::Right(futures::future::ready(Some(Output::invalid_request(id, self.compatibility.default_version()))))
 			},
 		}
 	}
@@ -366,7 +372,7 @@ fn write_response(response: Response) -> String {
 #[cfg(test)]
 mod tests {
 	use futures;
-	use types::{Value};
+	use types::Value;
 	use super::{IoHandler, Compatibility};
 
 	#[test]
@@ -402,7 +408,7 @@ mod tests {
 		let mut io = IoHandler::new();
 
 		io.add_method("say_hello", |_| {
-			futures::finished(Value::String("hello".to_string()))
+			futures::future::ok(Value::String("hello".to_string()))
 		});
 
 		let request = r#"{"jsonrpc": "2.0", "method": "say_hello", "params": [42, 23], "id": 1}"#;

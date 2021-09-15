@@ -1,3 +1,5 @@
+#![feature(into_future)]
+#![feature(generic_associated_types)]
 //! ### Transport agnostic jsonrpc library.
 //!
 //! Right now it supports only server side handling requests.
@@ -39,7 +41,7 @@ mod middleware;
 pub mod types;
 
 /// A `Future` trait object.
-pub type BoxFuture<T> = Box<futures::Future<Item = T, Error = Error> + Send>;
+pub type BoxFuture<'a, T> = futures::future::BoxFuture<'a, T>;
 
 /// A Result type.
 pub type Result<T> = ::std::result::Result<T, Error>;
