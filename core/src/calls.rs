@@ -1,7 +1,9 @@
 use std::fmt;
 use std::sync::Arc;
-use types::{Params, Value, Error};
-use futures::{Future, IntoFuture};
+use std::future::IntoFuture;
+
+use types::{Params, Value};
+use futures::Future;
 use BoxFuture;
 
 /// Metadata trait
@@ -14,7 +16,7 @@ impl<T: Sync + Send + 'static> Metadata for Arc<T> {}
 /// Asynchronous Method
 pub trait RpcMethodSimple: Send + Sync + 'static {
 	/// Output future
-	type Out: Future<Item = Value, Error = Error> + Send;
+	type Out: Future<Output = Value> + Send;
 	/// Call method
 	fn call(&self, params: Params) -> Self::Out;
 }
@@ -41,9 +43,9 @@ pub trait RpcNotification<T: Metadata>: Send + Sync + 'static {
 #[derive(Clone)]
 pub enum RemoteProcedure<T: Metadata> {
 	/// A method call
-	Method(Arc<RpcMethod<T>>),
+	Method(Arc<dyn RpcMethod<T>>),
 	/// A notification
-	Notification(Arc<RpcNotification<T>>),
+	Notification(Arc<dyn RpcNotification<T>>),
 	/// An alias to other method,
 	Alias(String),
 }
@@ -59,10 +61,12 @@ impl<T: Metadata> fmt::Debug for RemoteProcedure<T> {
 	}
 }
 
-impl<F: Send + Sync + 'static, X: Send + 'static, I> RpcMethodSimple for F where
+impl<F: Send + Sync + 'static, X: Send + 'static, I>
+	RpcMethodSimple for F
+	where
 	F: Fn(Params) -> I,
-	X: Future<Item = Value, Error = Error>,
-	I: IntoFuture<Item = Value, Error = Error, Future = X>,
+	X: Future<Output = Value>,
+	I: IntoFuture<Output = Value, Future = X>,
 {
 	type Out = X;
 	fn call(&self, params: Params) -> Self::Out {
@@ -81,11 +85,11 @@ impl<F: Send + Sync + 'static> RpcNotificationSimple for F where
 impl<F: Send + Sync + 'static, X: Send + 'static, T, I> RpcMethod<T> for F where
 	T: Metadata,
 	F: Fn(Params, T) -> I,
-	I: IntoFuture<Item = Value, Error = Error, Future = X>,
-	X: Future<Item = Value, Error = Error>,
+	I: IntoFuture<Output = Value, Future = X>,
+	X: Future<Output = Value>,
 {
 	fn call(&self, params: Params, meta: T) -> BoxFuture<Value> {
-		Box::new(self(params, meta).into_future())
+		Box::pin(self(params, meta).into_future())
 	}
 }
 

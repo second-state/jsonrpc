@@ -1,15 +1,16 @@
+# Only take care the members will be used in oasis-ssvm-runtime
 [workspace]
 members = [
 	"core",
 	"http",
-	"ipc",
+	# "ipc",
 	"macros",
-	"minihttp",
+	# "minihttp",
 	"pubsub",
-	"pubsub/more-examples",
-	"server-utils",
-	"stdio",
-	"tcp",
-	"test",
+	# "pubsub/more-examples",
+	# "server-utils",
+	# "stdio",
+	# "tcp",
+	# "test",
 	"ws",
 ]
